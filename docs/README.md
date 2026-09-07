@@ -4,6 +4,10 @@ Welcome to the Simple NFS Daemon documentation. This guide will help you underst
 
 ## Documentation Structure
 
+- **[diagrams/](diagrams/)** - Architecture and flow diagrams
+  - [Architecture Diagrams](diagrams/architecture.md) - System architecture and component diagrams
+  - [Flow Diagrams](diagrams/flow.md) - Request processing and logic flow diagrams
+
 ### Getting Started
 - [Installation Guide](getting-started/installation.md) - How to install Simple NFS Daemon
 - [Quick Start](getting-started/quick-start.md) - Get up and running in minutes

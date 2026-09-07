@@ -191,6 +191,6 @@ The Simple NFS Daemon project is now **~90% complete** for v0.5.1 with:
 
 ---
 
-*Last Updated: December 2024*  
+*Last Updated: February 2025*  
 *Project Status: ~90% Complete - Production Ready*
 

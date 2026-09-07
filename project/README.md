@@ -1,30 +1,31 @@
 # Project Management Documentation
 
-This directory contains project management, development, and internal documentation for the Simple NFS Daemon project.
+Internal planning docs for **Simple NFS Daemon** (`simple-nfsd`).
 
-## 📋 Document Organization
+## Document index
 
-### Project Status & Progress
-- **[PROJECT_STATUS.md](PROJECT_STATUS.md)** - Overall project status, completion metrics, and health indicators
-- **[PROGRESS_REPORT.md](PROGRESS_REPORT.md)** - Detailed progress report with honest assessment of what works and what's pending
+### Status & progress
+- **[PROJECT_STATUS.md](PROJECT_STATUS.md)** — overall status and metrics
+- **[PROGRESS_REPORT.md](PROGRESS_REPORT.md)** — honest assessment of what works
+- **[../PROJECT_OVERVIEW.md](../PROJECT_OVERVIEW.md)** — short executive overview
 
-### Implementation & Features
-- **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** - Summary of recent improvements and feature completions
-- **[FEATURE_AUDIT.md](FEATURE_AUDIT.md)** - Comprehensive audit of implemented vs. stubbed features
+### Implementation & features
+- **[FEATURE_AUDIT.md](FEATURE_AUDIT.md)** — implemented vs stubbed
+- **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** — recent work summary (if present)
 
-### Planning & Roadmap
-- **[ROADMAP.md](../ROADMAP.md)** - Development roadmap and future plans (in project root for visibility)
-- **[ROADMAP_CHECKLIST.md](ROADMAP_CHECKLIST.md)** - Detailed checklist tracking roadmap items
+### Planning & roadmap
+- **[ROADMAP.md](../ROADMAP.md)** — public roadmap
+- **[ROADMAP_CHECKLIST.md](ROADMAP_CHECKLIST.md)** — detailed checklists
 
-## 📚 User Documentation
+### Technical debt
+- **[TECHNICAL_DEBT.md](TECHNICAL_DEBT.md)** — known debt (canonical name; not `TECH_DEBT.md`)
 
-For user-facing documentation (installation, configuration, usage guides), see the **[docs/](../docs/)** directory.
+### Release
+- **[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)** — pre/post-release steps
+- **[RELEASING.md](../RELEASING.md)** — tag and publish how-to
+- **[CHANGELOG.md](../CHANGELOG.md)** — release history
+- **[VERSIONING.md](../VERSIONING.md)** — SemVer policy
 
-## 📝 Project History
+User-facing guides live under **[docs/](../docs/)** when present.
 
-For version history and changes, see **[CHANGELOG.md](../CHANGELOG.md)** in the project root.
-
----
-
-*This directory is for internal project management. User documentation is located in the `docs/` directory.*
-
+*Standard: SimpleDaemons `STANDARDIZATION_TEMPLATES/docs/PROJECT_DOCS_STANDARD.md`*
