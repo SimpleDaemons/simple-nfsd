@@ -1,348 +1,168 @@
 #!/usr/bin/env groovy
-// Jenkins Pipeline for simple-nfsd
-// Simple NFS Daemon - A lightweight and secure NFS server
-// Copyright 2024 SimpleDaemons
+// Canonical Multibranch Pipeline for a SimpleDaemons CMake daemon.
+// Copy to each daemon repo as Jenkinsfile; set PROJECT_NAME and CMAKE_EXTRA
+// in the environment block (from automation/build/vars/projects/<project>.yml).
+// Agent labels must match automation/build/inventory.ini: BUILD_DEB, BUILD_RPM,
+// BUILD_PKG, BUILD_DMG.
 
 pipeline {
-    agent any
-    
+    agent none
+
     parameters {
         choice(
             name: 'BUILD_TYPE',
             choices: ['Release', 'Debug'],
-            description: 'Build type'
+            description: 'CMake build type'
         )
-        choice(
-            name: 'PLATFORM',
-            choices: ['linux', 'macos', 'windows'],
-            description: 'Target platform'
+        booleanParam(
+            name: 'STATIC',
+            defaultValue: true,
+            description: 'ENABLE_STATIC_LINKING (default ON, matches remote-build.sh)'
         )
         booleanParam(
             name: 'RUN_TESTS',
             defaultValue: true,
-            description: 'Run tests'
-        )
-        booleanParam(
-            name: 'RUN_ANALYSIS',
-            defaultValue: true,
-            description: 'Run static analysis'
+            description: 'Run ctest after build'
         )
         booleanParam(
             name: 'CREATE_PACKAGES',
             defaultValue: false,
-            description: 'Create distribution packages'
+            description: 'Build packages (also forced on v* tags)'
         )
-        booleanParam(
-            name: 'DEPLOY',
-            defaultValue: false,
-            description: 'Deploy artifacts'
+        string(
+            name: 'PLATFORMS',
+            defaultValue: 'BUILD_DEB,BUILD_RPM,BUILD_PKG,BUILD_DMG',
+            description: 'Comma-separated agent labels to run'
         )
     }
-    
+
     environment {
         PROJECT_NAME = 'simple-nfsd'
-        VERSION = '${env.BUILD_NUMBER}'
-        BUILD_DIR = 'build'
-        DIST_DIR = 'dist'
-        DOCKER_IMAGE = "${PROJECT_NAME}:${VERSION}"
-        DOCKER_REGISTRY = 'your-registry.com'
+        // Extra -D flags from automation/build/vars/projects/<project>.yml
+        CMAKE_EXTRA = '-DENABLE_SSL=ON -DENABLE_JSON=ON'
     }
-    
+
     options {
-        timeout(time: 60, unit: 'MINUTES')
+        timeout(time: 90, unit: 'MINUTES')
         timestamps()
-        ansiColor('xterm')
-        buildDiscarder(logRotator(numToKeepStr: '10'))
+        buildDiscarder(logRotator(numToKeepStr: '20'))
         skipDefaultCheckout()
     }
-    
+
     stages {
-        stage('Checkout') {
-            steps {
-                checkout scm
-                script {
-                    env.GIT_COMMIT_SHORT = sh(
-                        script: 'git rev-parse --short HEAD',
-                        returnStdout: true
-                    ).trim()
+        stage('Matrix') {
+            matrix {
+                axes {
+                    axis {
+                        name 'AGENT_LABEL'
+                        values 'BUILD_DEB', 'BUILD_RPM', 'BUILD_PKG', 'BUILD_DMG'
+                    }
                 }
-            }
-        }
-        
-        stage('Setup') {
-            parallel {
-                stage('Linux Setup') {
-                    when {
-                        anyOf {
-                            equals expected: 'linux', actual: params.PLATFORM
-                            equals expected: 'all', actual: params.PLATFORM
+                stages {
+                    stage('Platform') {
+                        when {
+                            beforeAgent true
+                            expression {
+                                def wanted = params.PLATFORMS.tokenize(',').collect { it.trim() }.findAll { it }
+                                return wanted.contains(env.AGENT_LABEL)
+                            }
+                        }
+                        agent { label "${AGENT_LABEL}" }
+                        stages {
+                            stage('Checkout') {
+                                steps {
+                                    checkout scm
+                                }
+                            }
+                            stage('Configure') {
+                                steps {
+                                    sh '''
+                                        set -eux
+                                        rm -rf build
+                                        STATIC_FLAG=OFF
+                                        if [ "${STATIC}" = "true" ]; then STATIC_FLAG=ON; fi
+                                        PKG_FLAG=OFF
+                                        if [ "${CREATE_PACKAGES}" = "true" ] || echo "${TAG_NAME:-}" | grep -q '^v'; then
+                                            PKG_FLAG=ON
+                                        fi
+                                        # shellcheck disable=SC2086
+                                        cmake -S . -B build \
+                                            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+                                            -DENABLE_STATIC_LINKING="${STATIC_FLAG}" \
+                                            -DENABLE_PACKAGING="${PKG_FLAG}" \
+                                            ${CMAKE_EXTRA}
+                                    '''
+                                }
+                            }
+                            stage('Build') {
+                                steps {
+                                    sh '''
+                                        set -eux
+                                        JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+                                        if [ -z "${JOBS}" ] || [ "${JOBS}" = "0" ]; then
+                                            JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 2)"
+                                        fi
+                                        cmake --build build -j "${JOBS}"
+                                    '''
+                                }
+                            }
+                            stage('Test') {
+                                when {
+                                    expression { return params.RUN_TESTS }
+                                }
+                                steps {
+                                    sh '''
+                                        set -eux
+                                        ctest --test-dir build --output-on-failure
+                                    '''
+                                }
+                            }
+                            stage('Package') {
+                                when {
+                                    anyOf {
+                                        expression { return params.CREATE_PACKAGES }
+                                        buildingTag()
+                                        tag pattern: 'v*', comparator: 'GLOB'
+                                    }
+                                }
+                                steps {
+                                    sh '''
+                                        set -eux
+                                        if [ "${STATIC}" = "true" ]; then
+                                            cmake --build build --target static-package
+                                        else
+                                            case "${AGENT_LABEL}" in
+                                                BUILD_DEB)
+                                                    cmake --build build --target package-deb || make -C build package-deb
+                                                    ;;
+                                                BUILD_RPM)
+                                                    cmake --build build --target package-rpm || make -C build package-rpm
+                                                    ;;
+                                                BUILD_PKG|BUILD_DMG)
+                                                    cmake --build build --target package || make -C build package
+                                                    ;;
+                                                *)
+                                                    cmake --build build --target package || true
+                                                    ;;
+                                            esac
+                                        fi
+                                        cmake --build build --target package-source || make -C build package-source || true
+                                    '''
+                                }
+                            }
+                            stage('Archive') {
+                                steps {
+                                    archiveArtifacts(
+                                        artifacts: 'build/packages/**/*,build/**/*.deb,build/**/*.rpm,build/**/*.pkg,build/**/*.dmg,build/**/*.tar.gz,build/**/*.zip',
+                                        allowEmptyArchive: true,
+                                        fingerprint: true
+                                    )
+                                }
+                            }
                         }
                     }
-                    steps {
-                        sh '''
-                            sudo apt-get update -qq
-                            sudo apt-get install -y -qq build-essential cmake libssl-dev libjsoncpp-dev pkg-config
-                            sudo apt-get install -y -qq clang-format cppcheck python3-pip
-                            pip3 install --user bandit semgrep
-                        '''
-                    }
-                }
-                
-                stage('macOS Setup') {
-                    when {
-                        anyOf {
-                            equals expected: 'macos', actual: params.PLATFORM
-                            equals expected: 'all', actual: params.PLATFORM
-                        }
-                    }
-                    steps {
-                        sh '''
-                            brew update
-                            brew install cmake openssl jsoncpp clang-format cppcheck
-                            pip3 install --user bandit semgrep
-                        '''
-                    }
-                }
-                
-                stage('Windows Setup') {
-                    when {
-                        anyOf {
-                            equals expected: 'windows', actual: params.PLATFORM
-                            equals expected: 'all', actual: params.PLATFORM
-                        }
-                    }
-                    steps {
-                        bat '''
-                            echo "Windows setup would go here"
-                            echo "Install Visual Studio, CMake, vcpkg, etc."
-                        '''
-                    }
                 }
             }
-        }
-        
-        stage('Build') {
-            parallel {
-                stage('Linux Build') {
-                    when {
-                        anyOf {
-                            equals expected: 'linux', actual: params.PLATFORM
-                            equals expected: 'all', actual: params.PLATFORM
-                        }
-                    }
-                    steps {
-                        sh '''
-                            mkdir -p ${BUILD_DIR}
-                            cd ${BUILD_DIR}
-                            cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE}
-                            make -j$(nproc)
-                        '''
-                    }
-                }
-                
-                stage('macOS Build') {
-                    when {
-                        anyOf {
-                            equals expected: 'macos', actual: params.PLATFORM
-                            equals expected: 'all', actual: params.PLATFORM
-                        }
-                    }
-                    steps {
-                        sh '''
-                            mkdir -p ${BUILD_DIR}
-                            cd ${BUILD_DIR}
-                            cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE}
-                            make -j$(sysctl -n hw.ncpu)
-                        '''
-                    }
-                }
-                
-                stage('Windows Build') {
-                    when {
-                        anyOf {
-                            equals expected: 'windows', actual: params.PLATFORM
-                            equals expected: 'all', actual: params.PLATFORM
-                        }
-                    }
-                    steps {
-                        bat '''
-                            mkdir build
-                            cd build
-                            cmake .. -G "Visual Studio 16 2019" -A x64 -DCMAKE_BUILD_TYPE=%BUILD_TYPE%
-                            cmake --build . --config %BUILD_TYPE%
-                        '''
-                    }
-                }
-            }
-        }
-        
-        stage('Test') {
-            when {
-                expression { params.RUN_TESTS == true }
-            }
-            parallel {
-                stage('Linux Test') {
-                    when {
-                        anyOf {
-                            equals expected: 'linux', actual: params.PLATFORM
-                            equals expected: 'all', actual: params.PLATFORM
-                        }
-                    }
-                    steps {
-                        sh '''
-                            cd ${BUILD_DIR}
-                            make test
-                        '''
-                    }
-                }
-                
-                stage('macOS Test') {
-                    when {
-                        anyOf {
-                            equals expected: 'macos', actual: params.PLATFORM
-                            equals expected: 'all', actual: params.PLATFORM
-                        }
-                    }
-                    steps {
-                        sh '''
-                            cd ${BUILD_DIR}
-                            make test
-                        '''
-                    }
-                }
-                
-                stage('Windows Test') {
-                    when {
-                        anyOf {
-                            equals expected: 'windows', actual: params.PLATFORM
-                            equals expected: 'all', actual: params.PLATFORM
-                        }
-                    }
-                    steps {
-                        bat '''
-                            cd build
-                            ctest --output-on-failure -C %BUILD_TYPE%
-                        '''
-                    }
-                }
-            }
-        }
-        
-        stage('Analysis') {
-            when {
-                expression { params.RUN_ANALYSIS == true }
-            }
-            parallel {
-                stage('Code Style') {
-                    steps {
-                        sh '''
-                            make check-style
-                        '''
-                    }
-                }
-                
-                stage('Static Analysis') {
-                    steps {
-                        sh '''
-                            make lint
-                        '''
-                    }
-                }
-                
-                stage('Security Scan') {
-                    steps {
-                        sh '''
-                            make security-scan
-                        '''
-                    }
-                }
-            }
-        }
-        
-        stage('Package') {
-            when {
-                expression { params.CREATE_PACKAGES == true }
-            }
-            steps {
-                sh '''
-                    make package
-                    ls -la ${DIST_DIR}/
-                '''
-            }
-        }
-        
-        stage('Docker') {
-            steps {
-                script {
-                    def dockerfile = 'Dockerfile'
-                    if (fileExists(dockerfile)) {
-                        sh '''
-                            docker build -t ${DOCKER_IMAGE} .
-                            docker tag ${DOCKER_IMAGE} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}
-                        '''
-                    } else {
-                        echo "No Dockerfile found, skipping Docker build"
-                    }
-                }
-            }
-        }
-        
-        stage('Deploy') {
-            when {
-                expression { params.DEPLOY == true }
-            }
-            steps {
-                script {
-                    // Deploy to artifact repository
-                    sh '''
-                        echo "Deploying artifacts..."
-                        # Add your deployment logic here
-                        # e.g., upload to Nexus, Artifactory, etc.
-                    '''
-                    
-                    // Deploy Docker image
-                    if (fileExists('Dockerfile')) {
-                        sh '''
-                            docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}
-                        '''
-                    }
-                }
-            }
-        }
-    }
-    
-    post {
-        always {
-            // Archive artifacts
-            archiveArtifacts artifacts: 'dist/**', allowEmptyArchive: true
-            archiveArtifacts artifacts: 'build/**', allowEmptyArchive: true
-            
-            // Clean up
-            cleanWs()
-        }
-        
-        success {
-            echo 'Build succeeded!'
-            // Send success notification
-            emailext (
-                subject: "Build Success: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
-                body: "Build ${env.BUILD_NUMBER} succeeded for ${env.PROJECT_NAME}",
-                to: "${env.CHANGE_AUTHOR_EMAIL}"
-            )
-        }
-        
-        failure {
-            echo 'Build failed!'
-            // Send failure notification
-            emailext (
-                subject: "Build Failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
-                body: "Build ${env.BUILD_NUMBER} failed for ${env.PROJECT_NAME}. Check the console output for details.",
-                to: "${env.CHANGE_AUTHOR_EMAIL}"
-            )
-        }
-        
-        unstable {
-            echo 'Build unstable!'
         }
     }
 }
